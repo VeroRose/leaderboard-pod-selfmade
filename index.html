@@ -931,22 +931,28 @@ function rankMeta(rank) {
   return           { cls: 'rank-3', icon: '🥉', label: '#3 SQUAD', nameCls: 'r3', scorePillCls: 'sp-orange', footerTag: '▼ CLOSING IN', footerColor: 'var(--orange)'};
 }
 
+// ── SCORE FORMULA: (100-Rev)*0.4 + Backlog*0.4 + AdPerf*0.2 ───────
+function calcScore(rev, backlog, adperf) {
+  return (100 - rev) * 0.4 + backlog * 0.4 + adperf * 0.2;
+}
+
 // ── RENDER POD BATTLE ──────────────────────────────────────────────
 function renderBattle(rows) {
-  const sorted = [...rows].sort((a, b) =>
-    pct(g(b, 'Score')) - pct(g(a, 'Score'))
-  );
+  // Compute live scores and sort descending
+  const withScores = rows.map(pod => {
+    const rev     = pct(g(pod, 'Revision%', 'Revision'));
+    const backlog = pct(g(pod, 'Backlog Completion%', 'Backlog Completion', 'BacklogCompletion'));
+    const adperf  = pct(g(pod, 'Ad Performance Score', 'AdPerformanceScore', 'Ad Performance'));
+    return { pod, rev, backlog, adperf, score: calcScore(rev, backlog, adperf) };
+  });
+  const sorted = withScores.sort((a, b) => b.score - a.score);
 
   const grid = document.querySelector('.battle-grid');
   grid.innerHTML = '';
 
-  sorted.forEach((pod, i) => {
+  sorted.forEach(({ pod, rev, backlog, adperf, score }, i) => {
     const rank    = i + 1;
     const m       = rankMeta(rank);
-    const score   = pct(g(pod, 'Score'));
-    const rev     = pct(g(pod, 'Revision%', 'Revision'));
-    const backlog = pct(g(pod, 'Backlog Completion%', 'Backlog Completion', 'BacklogCompletion'));
-    const adperf  = pct(g(pod, 'Ad Performance Score', 'AdPerformanceScore', 'Ad Performance'));
     const members = g(pod, 'Members') || '—';
     const podName = `POD ${g(pod, 'Pod')}`;
 
@@ -1001,20 +1007,16 @@ function renderBattle(rows) {
   // Summary table
   const tbody = document.getElementById('battle-tbody');
   tbody.innerHTML = '';
-  sorted.forEach((pod, i) => {
-    const rank    = i + 1;
-    const m       = rankMeta(rank);
-    const score   = pct(g(pod, 'Score'));
-    const rev     = pct(g(pod, 'Revision%', 'Revision'));
-    const backlog = pct(g(pod, 'Backlog Completion%', 'Backlog Completion', 'BacklogCompletion'));
-    const adperf  = pct(g(pod, 'Ad Performance Score', 'AdPerformanceScore', 'Ad Performance'));
+  sorted.forEach(({ pod, rev, backlog, adperf, score }, i) => {
+    const rank      = i + 1;
+    const m         = rankMeta(rank);
     const podLetter = g(pod, 'Pod');
     tbody.innerHTML += `
       <tr>
         <td class="rank-cell ${m.nameCls}">${rank}</td>
         <td><span class="pod-chip pod-${podLetter.toLowerCase()}">POD ${podLetter}</span></td>
         <td>${g(pod, 'Members')}</td>
-        <td>${rev.toFixed(2)}%</td>
+        <td>${rev.toFixed(2)}% <span style="font-size:10px;color:var(--muted)">(inv: ${(100-rev).toFixed(2)}%)</span></td>
         <td>${backlog.toFixed(2)}%</td>
         <td>${adperf.toFixed(0)}%</td>
         <td style="text-align:right"><span class="score-pill ${m.scorePillCls}">${score.toFixed(2)}%</span></td>
