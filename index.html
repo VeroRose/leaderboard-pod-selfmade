@@ -877,12 +877,11 @@
 </div>
 
 <script>
-// ── LIVE DATA SOURCES ──────────────────────────────────────────────
 const CSV_BATTLE   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=722425499&single=true&output=csv';
 const CSV_ACCOUNTS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=1795723743&single=true&output=csv';
-const CACHE_KEY    = 'pod_hq_cache';
+const CACHE_KEY    = 'pod_hq_v3';
 
-// ── DYNAMIC QUARTER BADGE ──────────────────────────────────────────
+// ── QUARTER BADGE ──────────────────────────────────────────────────
 (function() {
   const now = new Date();
   const q = Math.ceil((now.getMonth() + 1) / 3);
@@ -897,16 +896,36 @@ function switchTab(tab) {
   event.target.closest('.tab').classList.add('active');
 }
 
-// ── CACHE: MIDNIGHT REFRESH ────────────────────────────────────────
+// ── WIB 2AM CACHE ─────────────────────────────────────────────────
+// Returns the most recent WIB (UTC+7) 2am as a UTC timestamp
+function getLastWIB2am() {
+  const now = new Date();
+  const wibNow = new Date(now.getTime() + 7 * 60 * 60 * 1000); // shift to WIB
+  // Build today's 2am WIB in UTC
+  const y = wibNow.getUTCFullYear(), mo = wibNow.getUTCMonth(), d = wibNow.getUTCDate();
+  let cutoff = new Date(Date.UTC(y, mo, d, 2 - 7 + 24, 0, 0)); // 2am WIB = 19:00 UTC prev day
+  // 2am WIB = UTC 19:00 previous calendar day
+  cutoff = new Date(Date.UTC(y, mo, d - 1, 19, 0, 0));
+  // If current WIB time is past 2am today, use today's 2am
+  if (wibNow.getUTCHours() >= 2) {
+    cutoff = new Date(Date.UTC(y, mo, d, 19, 0, 0));
+    // Actually: 2am WIB = 2am - 7h = -5h UTC = previous day 19:00 UTC
+    // Let's do it cleanly:
+  }
+  // Clean approach: find today's 02:00 WIB expressed in UTC
+  const wibMidnight = new Date(Date.UTC(y, mo, d, 0, 0, 0)); // WIB midnight = UTC midnight of WIB date
+  const wib2am = new Date(wibMidnight.getTime() - 7 * 3600000 + 2 * 3600000); // convert WIB->UTC
+  // If wib2am is in the future, use yesterday's
+  return wib2am > now ? new Date(wib2am.getTime() - 86400000) : wib2am;
+}
+
 function isCacheValid() {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return false;
     const { timestamp } = JSON.parse(raw);
     const saved = new Date(timestamp);
-    const now   = new Date();
-    // Expire at midnight — check if same calendar day
-    return saved.toDateString() === now.toDateString();
+    return saved >= getLastWIB2am();
   } catch { return false; }
 }
 
@@ -914,72 +933,91 @@ function saveCache(battleText, accText) {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({
       timestamp: new Date().toISOString(),
-      battleText,
-      accText
+      battleText, accText
     }));
-  } catch(e) { /* storage full or unavailable */ }
+  } catch(e) {}
 }
 
 function loadCache() {
-  try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch { return null; }
+  try { return JSON.parse(localStorage.getItem(CACHE_KEY)); }
+  catch { return null; }
 }
 
 // ── CSV PARSER ─────────────────────────────────────────────────────
 function parseCSV(text) {
-  const lines = text.trim().split('\n');
-  const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+  // Strip BOM if present
+  text = text.replace(/^\uFEFF/, '');
+  const lines = text.trim().split(/\r?\n/);
+  const rawHeaders = lines[0].split(',');
+  const headers = rawHeaders.map(h => h.trim().replace(/^"|"$/g, '').replace(/\s+/g, ' '));
+
+  console.log('CSV Headers:', headers); // debug
+
   return lines.slice(1).map(line => {
     const cols = [];
     let cur = '', inQ = false;
     for (let i = 0; i < line.length; i++) {
-      if (line[i] === '"') { inQ = !inQ; }
-      else if (line[i] === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
-      else { cur += line[i]; }
+      const ch = line[i];
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
+      else { cur += ch; }
     }
     cols.push(cur.trim());
     const obj = {};
-    headers.forEach((h, i) => obj[h] = (cols[i] || '').replace(/^"|"$/g, ''));
+    headers.forEach((h, i) => {
+      obj[h] = (cols[i] || '').replace(/^"|"$/g, '').trim();
+    });
     return obj;
   }).filter(r => Object.values(r).some(v => v !== ''));
 }
 
-// ── FUZZY COLUMN GETTER ────────────────────────────────────────────
-function g(row, ...candidates) {
-  const norm = s => s.toLowerCase().replace(/[\s%_\-\/\.]/g, '');
-  const keys = Object.keys(row);
-  for (const c of candidates) {
-    const cn = norm(c);
-    const match = keys.find(k => norm(k) === cn);
-    if (match !== undefined && row[match] !== undefined) return row[match];
+// ── FUZZY GETTER ───────────────────────────────────────────────────
+function g(row, ...keys) {
+  const n = s => s.toLowerCase().replace(/[\s%_\-\/\.]/g, '');
+  const rowKeys = Object.keys(row);
+  for (const k of keys) {
+    // Exact normalized match
+    const m = rowKeys.find(rk => n(rk) === n(k));
+    if (m !== undefined) return row[m] ?? '';
   }
-  for (const c of candidates) {
-    const cn = norm(c);
-    const match = keys.find(k => norm(k).includes(cn) || cn.includes(norm(k)));
-    if (match !== undefined && row[match] !== undefined) return row[match];
+  for (const k of keys) {
+    // Partial match
+    const m = rowKeys.find(rk => n(rk).includes(n(k)) || n(k).includes(n(rk)));
+    if (m !== undefined) return row[m] ?? '';
   }
   return '';
 }
 
-// ── HELPERS ────────────────────────────────────────────────────────
-function pct(str) {
-  if (!str && str !== 0) return 0;
-  const s = String(str).replace(/[$, ]/g, '').trim();
-  if (s === '' || s === '-') return 0;
-  if (s.endsWith('%')) return parseFloat(s) || 0;
+// ── VALUE PARSERS ──────────────────────────────────────────────────
+// Google Sheets CSV exports percentages as decimals (0.9491) not "94.91%"
+// BUT if formatted as % in sheet, it exports as "94.91%" string
+// We handle both cases:
+function pct(val) {
+  if (val === null || val === undefined || val === '') return 0;
+  const s = String(val).replace(/[$,\s]/g, '').trim();
+  if (s === '' || s === '-' || s === 'N/A') return 0;
+  if (s.endsWith('%')) {
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : n; // already 0-100
+  }
   const n = parseFloat(s);
   if (isNaN(n)) return 0;
-  return (Math.abs(n) <= 1.5) ? n * 100 : n;
+  // Heuristic: if absolute value <= 1, treat as decimal fraction → ×100
+  return Math.abs(n) <= 1 ? n * 100 : n;
 }
 
-function num(str) {
-  if (!str) return 0;
-  return parseFloat(String(str).replace(/[$,%\s]/g, '')) || 0;
+function num(val) {
+  if (!val) return 0;
+  return parseFloat(String(val).replace(/[$,%\s]/g, '')) || 0;
 }
 
+// ── SCORE FORMULA ──────────────────────────────────────────────────
+// Higher revision = BAD, so invert it
+function calcScore(rev, backlog, adperf) {
+  return (100 - rev) * 0.4 + backlog * 0.4 + adperf * 0.2;
+}
+
+// ── STYLE HELPERS ──────────────────────────────────────────────────
 function scoreClass(s) {
   if (s >= 75) return 'score-high';
   if (s >= 60) return 'score-good';
@@ -987,50 +1025,43 @@ function scoreClass(s) {
   if (s >= 20) return 'score-low';
   return 'score-bad';
 }
-
-function podClass(p) { return p === 'A' ? 'pod-a' : p === 'B' ? 'pod-b' : 'pod-c'; }
-function podBorderClass(p) { return p === 'A' ? 'pod-a-border' : p === 'B' ? 'pod-b-border' : 'pod-c-border'; }
-
-function rankMeta(rank) {
-  if (rank === 1) return { cls: 'rank-1', icon: '👑', label: '#1 SQUAD', nameCls: 'r1', scorePillCls: 'sp-gold',   footerTag: '▲ CHAMPION',   footerColor: 'var(--green)'  };
-  if (rank === 2) return { cls: 'rank-2', icon: '🥈', label: '#2 SQUAD', nameCls: 'r2', scorePillCls: 'sp-cyan',   footerTag: '▲ RUNNER-UP',  footerColor: 'var(--cyan)'   };
-  return           { cls: 'rank-3', icon: '🥉', label: '#3 SQUAD', nameCls: 'r3', scorePillCls: 'sp-orange', footerTag: '▼ CLOSING IN', footerColor: 'var(--orange)' };
-}
-
-// ── SCORE FORMULA ──────────────────────────────────────────────────
-function calcScore(rev, backlog, adperf) {
-  return (100 - rev) * 0.4 + backlog * 0.4 + adperf * 0.2;
+function podClass(p) { return p==='A'?'pod-a':p==='B'?'pod-b':'pod-c'; }
+function podBorderClass(p) { return p==='A'?'pod-a-border':p==='B'?'pod-b-border':'pod-c-border'; }
+function rankMeta(r) {
+  if (r===1) return {cls:'rank-1',icon:'👑',label:'#1 SQUAD',nameCls:'r1',pillCls:'sp-gold',  tag:'▲ CHAMPION',  tagColor:'var(--green)' };
+  if (r===2) return {cls:'rank-2',icon:'🥈',label:'#2 SQUAD',nameCls:'r2',pillCls:'sp-cyan',  tag:'▲ RUNNER-UP', tagColor:'var(--cyan)'  };
+  return            {cls:'rank-3',icon:'🥉',label:'#3 SQUAD',nameCls:'r3',pillCls:'sp-orange',tag:'▼ CLOSING IN',tagColor:'var(--orange)'};
 }
 
 // ── RENDER POD BATTLE ──────────────────────────────────────────────
 function renderBattle(rows) {
-  const withScores = rows.map(pod => {
-    const rev     = pct(g(pod, 'Revision%', 'Revision'));
-    const backlog = pct(g(pod, 'Backlog Completion%', 'Backlog Completion', 'BacklogCompletion'));
-    const adperf  = pct(g(pod, 'Ad Performance Score', 'AdPerformanceScore', 'Ad Performance'));
-    return { pod, rev, backlog, adperf, score: calcScore(rev, backlog, adperf) };
-  });
-  const sorted = withScores.sort((a, b) => b.score - a.score);
+  // Log first row to debug columns
+  if (rows[0]) console.log('Battle row sample:', rows[0]);
+
+  const scored = rows.map(pod => {
+    // Try multiple possible column names for each field
+    const rev     = pct(g(pod, 'Revision%', 'Revision %', 'Revision'));
+    const backlog = pct(g(pod, 'Backlog Completion%', 'Backlog Completion %', 'Backlog Completion', 'Backlog'));
+    const adperf  = pct(g(pod, 'Ad Performance Score', 'Ad Performance', 'AdPerformanceScore'));
+    const score   = calcScore(rev, backlog, adperf);
+    console.log(`Pod ${g(pod,'Pod')}: rev=${rev} backlog=${backlog} adperf=${adperf} score=${score}`);
+    return { pod, rev, backlog, adperf, score };
+  }).sort((a,b) => b.score - a.score);
 
   const grid = document.querySelector('.battle-grid');
   grid.innerHTML = '';
-  sorted.forEach(({ pod, rev, backlog, adperf, score }, i) => {
-    const rank    = i + 1;
-    const m       = rankMeta(rank);
-    const members = g(pod, 'Members') || '—';
-    const podName = `POD ${g(pod, 'Pod')}`;
+  scored.forEach(({pod, rev, backlog, adperf, score}, i) => {
+    const rank = i+1, m = rankMeta(rank);
+    const members = g(pod,'Members') || '—';
     grid.innerHTML += `
       <div class="pod-card ${m.cls}">
         <div class="corner-deco tl"></div><div class="corner-deco tr"></div>
         <div class="pod-header">
           <div class="pod-name-block">
             <div class="pod-label">Rank</div>
-            <div class="pod-name">${podName}</div>
+            <div class="pod-name">POD ${g(pod,'Pod')}</div>
           </div>
-          <div class="pod-badge">
-            <div class="badge-icon">${m.icon}</div>
-            <div class="badge-label">${m.label}</div>
-          </div>
+          <div class="pod-badge"><div class="badge-icon">${m.icon}</div><div class="badge-label">${m.label}</div></div>
           <div class="pod-rank">${rank}</div>
         </div>
         <div class="pod-score-main">
@@ -1062,40 +1093,35 @@ function renderBattle(rows) {
         </div>
         <div class="pod-footer">
           <span class="members-tag">${members} ACTIVE OPERATORS</span>
-          <span class="delta-tag" style="color:${m.footerColor}">${m.footerTag}</span>
+          <span class="delta-tag" style="color:${m.tagColor}">${m.tag}</span>
         </div>
       </div>`;
   });
 
   const tbody = document.getElementById('battle-tbody');
   tbody.innerHTML = '';
-  sorted.forEach(({ pod, rev, backlog, adperf, score }, i) => {
-    const rank      = i + 1;
-    const m         = rankMeta(rank);
-    const podLetter = g(pod, 'Pod');
+  scored.forEach(({pod, rev, backlog, adperf, score}, i) => {
+    const rank = i+1, m = rankMeta(rank), pl = g(pod,'Pod');
     tbody.innerHTML += `
       <tr>
         <td class="rank-cell ${m.nameCls}">${rank}</td>
-        <td><span class="pod-chip pod-${podLetter.toLowerCase()}">POD ${podLetter}</span></td>
-        <td>${g(pod, 'Members')}</td>
-        <td>${rev.toFixed(2)}% <span style="font-size:10px;color:var(--muted)">(inv: ${(100-rev).toFixed(2)}%)</span></td>
+        <td><span class="pod-chip pod-${pl.toLowerCase()}">POD ${pl}</span></td>
+        <td>${g(pod,'Members')}</td>
+        <td>${rev.toFixed(2)}%</td>
         <td>${backlog.toFixed(2)}%</td>
         <td>${adperf.toFixed(0)}%</td>
-        <td style="text-align:right"><span class="score-pill ${m.scorePillCls}">${score.toFixed(2)}%</span></td>
+        <td style="text-align:right"><span class="score-pill ${m.pillCls}">${score.toFixed(2)}%</span></td>
       </tr>`;
   });
 }
 
-// ── POD FILTER STATE ───────────────────────────────────────────────
-let activePodFilter = 'ALL';
-let allAccountRows  = [];
+// ── POD FILTER ─────────────────────────────────────────────────────
+let activePod = 'ALL', allAccRows = [];
 
 function setPodFilter(pod) {
-  activePodFilter = pod;
-  // Update button styles
-  document.querySelectorAll('.pod-filter-btn').forEach(btn => {
-    const isActive = btn.dataset.pod === pod;
-    btn.classList.toggle('pfb-active', isActive);
+  activePod = pod;
+  document.querySelectorAll('.pod-filter-btn').forEach(b => {
+    b.classList.toggle('pfb-active', b.dataset.pod === pod);
   });
   renderAccountRows();
 }
@@ -1103,80 +1129,66 @@ function setPodFilter(pod) {
 function renderAccountRows() {
   const tbody = document.getElementById('acc-tbody');
   tbody.innerHTML = '';
-  const rows = activePodFilter === 'ALL'
-    ? allAccountRows
-    : allAccountRows.filter(a => g(a, 'Pod') === activePodFilter);
-
+  const rows = activePod === 'ALL' ? allAccRows : allAccRows.filter(a => g(a,'Pod') === activePod);
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="11" style="padding:24px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">NO DATA FOR POD ${activePod}</td></tr>`;
+    return;
+  }
   rows.forEach(a => {
-    const pod   = g(a, 'Pod');
-    const slm   = pct(g(a, 'Scoring Last Month',  'ScoringLastMonth'));
-    const stm   = pct(g(a, 'Scoring This Month',  'ScoringThisMonth'));
-    const ilm   = num(g(a, 'Index Last Month',     'IndexLastMonth'));
-    const itm   = num(g(a, 'Index This Month',     'IndexThisMonth'));
-    const trend = g(a, 'Trend Arrow', 'TrendArrow') || '';
-    const trendClass = trend.includes('↑') ? 'trend-up' : 'trend-dn';
+    const pod = g(a,'Pod');
+    const slm = pct(g(a,'Scoring Last Month','ScoringLastMonth'));
+    const stm = pct(g(a,'Scoring This Month','ScoringThisMonth'));
+    const ilm = num(g(a,'Index Last Month','IndexLastMonth'));
+    const itm = num(g(a,'Index This Month','IndexThisMonth'));
+    const trend = g(a,'Trend Arrow','TrendArrow') || '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><strong style="color:var(--white)">${g(a, 'Client')}</strong></td>
+      <td><strong style="color:var(--white)">${g(a,'Client')}</strong></td>
       <td><span class="pod-chip ${podClass(pod)}">POD ${pod}</span></td>
-      <td style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">${g(a, 'Metric Type', 'MetricType')}</td>
-      <td style="font-size:12px;color:var(--muted)">${g(a, 'Target Text', 'TargetText')}</td>
-      <td style="font-family:var(--font-mono);font-size:13px">${g(a, 'Last Month', 'LastMonth')}</td>
-      <td style="font-family:var(--font-mono);font-size:13px">${g(a, 'This Month', 'ThisMonth')}</td>
+      <td style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">${g(a,'Metric Type','MetricType')}</td>
+      <td style="font-size:12px;color:var(--muted)">${g(a,'Target Text','TargetText')}</td>
+      <td style="font-family:var(--font-mono);font-size:13px">${g(a,'Last Month','LastMonth')}</td>
+      <td style="font-family:var(--font-mono);font-size:13px">${g(a,'This Month','ThisMonth')}</td>
       <td class="index-val">${ilm.toFixed(2)}</td>
       <td class="index-val">${itm.toFixed(2)}</td>
       <td><span class="score-num ${scoreClass(slm)}">${slm.toFixed(1)}%</span></td>
       <td><span class="score-num ${scoreClass(stm)}">${stm.toFixed(1)}%</span></td>
-      <td class="${trendClass}">${trend}</td>
-    `;
+      <td class="${trend.includes('↑')?'trend-up':'trend-dn'}">${trend}</td>`;
     tbody.appendChild(tr);
   });
-
-  // Show empty state
-  if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="11" style="padding:24px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">NO DATA FOR POD ${activePodFilter}</td></tr>`;
-  }
 }
 
-// ── RENDER ACCOUNT PERFORMANCE ─────────────────────────────────────
 function renderAccounts(rows) {
-  allAccountRows = rows;
+  allAccRows = rows;
+  if (rows[0]) console.log('Account row sample:', rows[0]);
 
-  // Inject pod filter bar above table if not already there
   if (!document.getElementById('pod-filter-bar')) {
     const wrap = document.querySelector('.acc-table-wrap');
-    const bar  = document.createElement('div');
-    bar.id     = 'pod-filter-bar';
+    const bar = document.createElement('div');
+    bar.id = 'pod-filter-bar';
     bar.style.cssText = 'display:flex;gap:8px;padding:14px 16px 0;background:var(--bg3);border-bottom:1px solid var(--border);flex-wrap:wrap;align-items:center;';
-
-    const label = document.createElement('span');
-    label.style.cssText = 'font-family:var(--font-mono);font-size:9px;letter-spacing:3px;color:var(--muted);margin-right:4px;text-transform:uppercase;';
-    label.textContent = 'Filter by Pod:';
-    bar.appendChild(label);
-
-    const pods = [
-      { key: 'ALL', label: 'ALL PODS', cls: '' },
-      { key: 'A',   label: 'POD A',    cls: 'pod-a' },
-      { key: 'B',   label: 'POD B',    cls: 'pod-b' },
-      { key: 'C',   label: 'POD C',    cls: 'pod-c' },
-    ];
-    pods.forEach(p => {
+    const lbl = document.createElement('span');
+    lbl.style.cssText = 'font-family:var(--font-mono);font-size:9px;letter-spacing:3px;color:var(--muted);margin-right:4px;';
+    lbl.textContent = 'FILTER BY POD:';
+    bar.appendChild(lbl);
+    [['ALL','ALL PODS'],['A','POD A'],['B','POD B'],['C','POD C']].forEach(([key,label]) => {
       const btn = document.createElement('button');
-      btn.className    = `pod-filter-btn ${p.key === 'ALL' ? 'pfb-active' : ''}`;
-      btn.dataset.pod  = p.key;
-      btn.textContent  = p.label;
-      btn.onclick      = () => setPodFilter(p.key);
-      if (p.cls) btn.dataset.podcls = p.cls;
+      btn.className = `pod-filter-btn${key==='ALL'?' pfb-active':''}`;
+      btn.dataset.pod = key;
+      btn.textContent = label;
+      btn.onclick = () => setPodFilter(key);
       bar.appendChild(btn);
     });
-
     wrap.insertBefore(bar, wrap.firstChild);
   }
-
   renderAccountRows();
 }
 
-// ── LOADING STATE ──────────────────────────────────────────────────
+// ── LOADING / STATUS ───────────────────────────────────────────────
+function setStatus(html, color='var(--green)') {
+  const el = document.querySelector('.live-indicator');
+  if (el) el.innerHTML = html;
+}
 function setLoading(msg) {
   document.querySelector('.battle-grid').innerHTML =
     `<div style="grid-column:1/-1;padding:40px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:3px;">${msg}</div>`;
@@ -1184,39 +1196,38 @@ function setLoading(msg) {
     `<tr><td colspan="11" style="padding:30px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">${msg}</td></tr>`;
 }
 
-// ── INIT: CACHE-FIRST, FETCH IF STALE ─────────────────────────────
+// ── INIT ───────────────────────────────────────────────────────────
 async function init() {
-  // Try cache first — instant render
+  // Instant render from cache if still valid (refreshes at 2am WIB)
   if (isCacheValid()) {
     const cache = loadCache();
     if (cache) {
       renderBattle(parseCSV(cache.battleText));
       renderAccounts(parseCSV(cache.accText));
-      // Show subtle "from cache" indicator
-      const badge = document.querySelector('.live-indicator');
-      if (badge) badge.innerHTML = '<div class="live-dot" style="background:var(--gold)"></div> <span style="color:var(--gold)">CACHED · REFRESHES MIDNIGHT</span>';
+      const next2am = new Date(getLastWIB2am().getTime() + 86400000);
+      const hhmm = next2am.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',timeZone:'Asia/Jakarta'});
+      setStatus(`<div class="live-dot" style="background:var(--gold)"></div> <span style="color:var(--gold);font-family:var(--font-mono);font-size:11px;">CACHED · NEXT REFRESH ${hhmm} WIB</span>`);
       return;
     }
   }
 
-  // Cache miss — fetch live
-  setLoading('⟳ LOADING LIVE DATA...');
+  // Fetch fresh
+  setLoading('⟳ SYNCING LIVE DATA...');
   try {
-    const [battleRes, accRes] = await Promise.all([fetch(CSV_BATTLE), fetch(CSV_ACCOUNTS)]);
-    const [battleText, accText] = await Promise.all([battleRes.text(), accRes.text()]);
-    saveCache(battleText, accText);
-    renderBattle(parseCSV(battleText));
-    renderAccounts(parseCSV(accText));
-  } catch (err) {
-    // If fetch fails but we have stale cache, use it as fallback
+    const [br, ar] = await Promise.all([fetch(CSV_BATTLE), fetch(CSV_ACCOUNTS)]);
+    const [bt, at] = await Promise.all([br.text(), ar.text()]);
+    saveCache(bt, at);
+    renderBattle(parseCSV(bt));
+    renderAccounts(parseCSV(at));
+    setStatus(`<div class="live-dot"></div> <span style="font-family:var(--font-mono);font-size:11px;color:var(--green);">LIVE · REFRESHES 02:00 WIB</span>`);
+  } catch(err) {
     const cache = loadCache();
     if (cache) {
       renderBattle(parseCSV(cache.battleText));
       renderAccounts(parseCSV(cache.accText));
-      const badge = document.querySelector('.live-indicator');
-      if (badge) badge.innerHTML = '<div class="live-dot" style="background:var(--orange)"></div> <span style="color:var(--orange)">STALE CACHE — FETCH FAILED</span>';
+      setStatus(`<div class="live-dot" style="background:var(--orange)"></div> <span style="color:var(--orange);font-family:var(--font-mono);font-size:11px;">STALE CACHE</span>`);
     } else {
-      setLoading('⚠ FAILED TO LOAD — Ensure sheet is published publicly');
+      setLoading('⚠ FAILED TO LOAD — Check sheet is published publicly');
     }
     console.error(err);
   }
