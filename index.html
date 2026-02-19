@@ -552,6 +552,43 @@
     margin: 28px 0;
   }
 
+  /* ===== POD FILTER BUTTONS ===== */
+  .pod-filter-btn {
+    padding: 6px 16px;
+    font-family: var(--font-head); font-size: 13px; font-weight: 700;
+    letter-spacing: 2px; text-transform: uppercase;
+    background: var(--bg4); border: 1px solid var(--border);
+    color: var(--muted); cursor: pointer;
+    transition: all 0.18s; outline: none;
+    margin-bottom: 10px;
+  }
+  .pod-filter-btn:hover { color: var(--white); border-color: var(--border-bright); }
+
+  /* ALL */
+  .pod-filter-btn[data-pod="ALL"].pfb-active {
+    background: rgba(255,255,255,0.07);
+    border-color: var(--white); color: var(--white);
+    box-shadow: 0 0 10px rgba(255,255,255,0.1);
+  }
+  /* Pod A — gold */
+  .pod-filter-btn[data-pod="A"].pfb-active {
+    background: rgba(245,197,24,0.12);
+    border-color: var(--gold); color: var(--gold);
+    box-shadow: 0 0 12px rgba(245,197,24,0.2);
+  }
+  /* Pod B — cyan */
+  .pod-filter-btn[data-pod="B"].pfb-active {
+    background: rgba(0,212,255,0.1);
+    border-color: var(--cyan); color: var(--cyan);
+    box-shadow: 0 0 12px rgba(0,212,255,0.2);
+  }
+  /* Pod C — orange */
+  .pod-filter-btn[data-pod="C"].pfb-active {
+    background: rgba(240,120,48,0.12);
+    border-color: var(--orange); color: var(--orange);
+    box-shadow: 0 0 12px rgba(240,120,48,0.2);
+  }
+
   @media (max-width: 900px) {
     .battle-grid { grid-template-columns: 1fr; }
     .content { padding: 20px; }
@@ -843,6 +880,7 @@
 // ── LIVE DATA SOURCES ──────────────────────────────────────────────
 const CSV_BATTLE   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=722425499&single=true&output=csv';
 const CSV_ACCOUNTS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=1795723743&single=true&output=csv';
+const CACHE_KEY    = 'pod_hq_cache';
 
 // ── DYNAMIC QUARTER BADGE ──────────────────────────────────────────
 (function() {
@@ -857,6 +895,37 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-' + tab).classList.add('active');
   event.target.closest('.tab').classList.add('active');
+}
+
+// ── CACHE: MIDNIGHT REFRESH ────────────────────────────────────────
+function isCacheValid() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return false;
+    const { timestamp } = JSON.parse(raw);
+    const saved = new Date(timestamp);
+    const now   = new Date();
+    // Expire at midnight — check if same calendar day
+    return saved.toDateString() === now.toDateString();
+  } catch { return false; }
+}
+
+function saveCache(battleText, accText) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      battleText,
+      accText
+    }));
+  } catch(e) { /* storage full or unavailable */ }
+}
+
+function loadCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
 }
 
 // ── CSV PARSER ─────────────────────────────────────────────────────
@@ -879,7 +948,6 @@ function parseCSV(text) {
 }
 
 // ── FUZZY COLUMN GETTER ────────────────────────────────────────────
-// Finds a key in a row object regardless of case, spaces, % signs
 function g(row, ...candidates) {
   const norm = s => s.toLowerCase().replace(/[\s%_\-\/\.]/g, '');
   const keys = Object.keys(row);
@@ -888,7 +956,6 @@ function g(row, ...candidates) {
     const match = keys.find(k => norm(k) === cn);
     if (match !== undefined && row[match] !== undefined) return row[match];
   }
-  // Last resort: partial match
   for (const c of candidates) {
     const cn = norm(c);
     const match = keys.find(k => norm(k).includes(cn) || cn.includes(norm(k)));
@@ -905,7 +972,6 @@ function pct(str) {
   if (s.endsWith('%')) return parseFloat(s) || 0;
   const n = parseFloat(s);
   if (isNaN(n)) return 0;
-  // If stored as decimal (0.0–1.0 range), multiply by 100
   return (Math.abs(n) <= 1.5) ? n * 100 : n;
 }
 
@@ -926,19 +992,18 @@ function podClass(p) { return p === 'A' ? 'pod-a' : p === 'B' ? 'pod-b' : 'pod-c
 function podBorderClass(p) { return p === 'A' ? 'pod-a-border' : p === 'B' ? 'pod-b-border' : 'pod-c-border'; }
 
 function rankMeta(rank) {
-  if (rank === 1) return { cls: 'rank-1', icon: '👑', label: '#1 SQUAD', nameCls: 'r1', scorePillCls: 'sp-gold',   footerTag: '▲ CHAMPION',   footerColor: 'var(--green)' };
-  if (rank === 2) return { cls: 'rank-2', icon: '🥈', label: '#2 SQUAD', nameCls: 'r2', scorePillCls: 'sp-cyan',   footerTag: '▲ RUNNER-UP',  footerColor: 'var(--cyan)'  };
-  return           { cls: 'rank-3', icon: '🥉', label: '#3 SQUAD', nameCls: 'r3', scorePillCls: 'sp-orange', footerTag: '▼ CLOSING IN', footerColor: 'var(--orange)'};
+  if (rank === 1) return { cls: 'rank-1', icon: '👑', label: '#1 SQUAD', nameCls: 'r1', scorePillCls: 'sp-gold',   footerTag: '▲ CHAMPION',   footerColor: 'var(--green)'  };
+  if (rank === 2) return { cls: 'rank-2', icon: '🥈', label: '#2 SQUAD', nameCls: 'r2', scorePillCls: 'sp-cyan',   footerTag: '▲ RUNNER-UP',  footerColor: 'var(--cyan)'   };
+  return           { cls: 'rank-3', icon: '🥉', label: '#3 SQUAD', nameCls: 'r3', scorePillCls: 'sp-orange', footerTag: '▼ CLOSING IN', footerColor: 'var(--orange)' };
 }
 
-// ── SCORE FORMULA: (100-Rev)*0.4 + Backlog*0.4 + AdPerf*0.2 ───────
+// ── SCORE FORMULA ──────────────────────────────────────────────────
 function calcScore(rev, backlog, adperf) {
   return (100 - rev) * 0.4 + backlog * 0.4 + adperf * 0.2;
 }
 
 // ── RENDER POD BATTLE ──────────────────────────────────────────────
 function renderBattle(rows) {
-  // Compute live scores and sort descending
   const withScores = rows.map(pod => {
     const rev     = pct(g(pod, 'Revision%', 'Revision'));
     const backlog = pct(g(pod, 'Backlog Completion%', 'Backlog Completion', 'BacklogCompletion'));
@@ -949,13 +1014,11 @@ function renderBattle(rows) {
 
   const grid = document.querySelector('.battle-grid');
   grid.innerHTML = '';
-
   sorted.forEach(({ pod, rev, backlog, adperf, score }, i) => {
     const rank    = i + 1;
     const m       = rankMeta(rank);
     const members = g(pod, 'Members') || '—';
     const podName = `POD ${g(pod, 'Pod')}`;
-
     grid.innerHTML += `
       <div class="pod-card ${m.cls}">
         <div class="corner-deco tl"></div><div class="corner-deco tr"></div>
@@ -1004,7 +1067,6 @@ function renderBattle(rows) {
       </div>`;
   });
 
-  // Summary table
   const tbody = document.getElementById('battle-tbody');
   tbody.innerHTML = '';
   sorted.forEach(({ pod, rev, backlog, adperf, score }, i) => {
@@ -1024,32 +1086,27 @@ function renderBattle(rows) {
   });
 }
 
-// ── RENDER ACCOUNT PERFORMANCE ─────────────────────────────────────
-function renderAccounts(rows) {
-  const podBrands = {};
-  rows.forEach(a => {
-    const pod = g(a, 'Pod');
-    if (!podBrands[pod]) podBrands[pod] = [];
-    podBrands[pod].push(a);
+// ── POD FILTER STATE ───────────────────────────────────────────────
+let activePodFilter = 'ALL';
+let allAccountRows  = [];
+
+function setPodFilter(pod) {
+  activePodFilter = pod;
+  // Update button styles
+  document.querySelectorAll('.pod-filter-btn').forEach(btn => {
+    const isActive = btn.dataset.pod === pod;
+    btn.classList.toggle('pfb-active', isActive);
   });
+  renderAccountRows();
+}
 
-  function buildTooltip(pod) {
-    const brands = podBrands[pod] || [];
-    const brandRows = brands.map(b => {
-      const stm = pct(g(b, 'Scoring This Month', 'ScoringThisMonth'));
-      return `<div class="tooltip-brand">
-        <span>${g(b, 'Client')}</span>
-        <span class="tooltip-brand-score ${scoreClass(stm)}">${stm.toFixed(1)}%</span>
-      </div>`;
-    }).join('');
-    return `<div class="pod-tooltip ${podBorderClass(pod)}">
-      <div class="tooltip-title">Pod ${pod} — Brands</div>
-      ${brandRows}
-    </div>`;
-  }
-
+function renderAccountRows() {
   const tbody = document.getElementById('acc-tbody');
   tbody.innerHTML = '';
+  const rows = activePodFilter === 'ALL'
+    ? allAccountRows
+    : allAccountRows.filter(a => g(a, 'Pod') === activePodFilter);
+
   rows.forEach(a => {
     const pod   = g(a, 'Pod');
     const slm   = pct(g(a, 'Scoring Last Month',  'ScoringLastMonth'));
@@ -1061,12 +1118,7 @@ function renderAccounts(rows) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><strong style="color:var(--white)">${g(a, 'Client')}</strong></td>
-      <td>
-        <div class="pod-chip-wrap">
-          <span class="pod-chip ${podClass(pod)}">POD ${pod}</span>
-          ${buildTooltip(pod)}
-        </div>
-      </td>
+      <td><span class="pod-chip ${podClass(pod)}">POD ${pod}</span></td>
       <td style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">${g(a, 'Metric Type', 'MetricType')}</td>
       <td style="font-size:12px;color:var(--muted)">${g(a, 'Target Text', 'TargetText')}</td>
       <td style="font-family:var(--font-mono);font-size:13px">${g(a, 'Last Month', 'LastMonth')}</td>
@@ -1079,6 +1131,49 @@ function renderAccounts(rows) {
     `;
     tbody.appendChild(tr);
   });
+
+  // Show empty state
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="11" style="padding:24px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">NO DATA FOR POD ${activePodFilter}</td></tr>`;
+  }
+}
+
+// ── RENDER ACCOUNT PERFORMANCE ─────────────────────────────────────
+function renderAccounts(rows) {
+  allAccountRows = rows;
+
+  // Inject pod filter bar above table if not already there
+  if (!document.getElementById('pod-filter-bar')) {
+    const wrap = document.querySelector('.acc-table-wrap');
+    const bar  = document.createElement('div');
+    bar.id     = 'pod-filter-bar';
+    bar.style.cssText = 'display:flex;gap:8px;padding:14px 16px 0;background:var(--bg3);border-bottom:1px solid var(--border);flex-wrap:wrap;align-items:center;';
+
+    const label = document.createElement('span');
+    label.style.cssText = 'font-family:var(--font-mono);font-size:9px;letter-spacing:3px;color:var(--muted);margin-right:4px;text-transform:uppercase;';
+    label.textContent = 'Filter by Pod:';
+    bar.appendChild(label);
+
+    const pods = [
+      { key: 'ALL', label: 'ALL PODS', cls: '' },
+      { key: 'A',   label: 'POD A',    cls: 'pod-a' },
+      { key: 'B',   label: 'POD B',    cls: 'pod-b' },
+      { key: 'C',   label: 'POD C',    cls: 'pod-c' },
+    ];
+    pods.forEach(p => {
+      const btn = document.createElement('button');
+      btn.className    = `pod-filter-btn ${p.key === 'ALL' ? 'pfb-active' : ''}`;
+      btn.dataset.pod  = p.key;
+      btn.textContent  = p.label;
+      btn.onclick      = () => setPodFilter(p.key);
+      if (p.cls) btn.dataset.podcls = p.cls;
+      bar.appendChild(btn);
+    });
+
+    wrap.insertBefore(bar, wrap.firstChild);
+  }
+
+  renderAccountRows();
 }
 
 // ── LOADING STATE ──────────────────────────────────────────────────
@@ -1089,16 +1184,40 @@ function setLoading(msg) {
     `<tr><td colspan="11" style="padding:30px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">${msg}</td></tr>`;
 }
 
-// ── INIT ───────────────────────────────────────────────────────────
+// ── INIT: CACHE-FIRST, FETCH IF STALE ─────────────────────────────
 async function init() {
+  // Try cache first — instant render
+  if (isCacheValid()) {
+    const cache = loadCache();
+    if (cache) {
+      renderBattle(parseCSV(cache.battleText));
+      renderAccounts(parseCSV(cache.accText));
+      // Show subtle "from cache" indicator
+      const badge = document.querySelector('.live-indicator');
+      if (badge) badge.innerHTML = '<div class="live-dot" style="background:var(--gold)"></div> <span style="color:var(--gold)">CACHED · REFRESHES MIDNIGHT</span>';
+      return;
+    }
+  }
+
+  // Cache miss — fetch live
   setLoading('⟳ LOADING LIVE DATA...');
   try {
     const [battleRes, accRes] = await Promise.all([fetch(CSV_BATTLE), fetch(CSV_ACCOUNTS)]);
     const [battleText, accText] = await Promise.all([battleRes.text(), accRes.text()]);
+    saveCache(battleText, accText);
     renderBattle(parseCSV(battleText));
     renderAccounts(parseCSV(accText));
   } catch (err) {
-    setLoading('⚠ FAILED TO LOAD — Ensure sheet is published publicly');
+    // If fetch fails but we have stale cache, use it as fallback
+    const cache = loadCache();
+    if (cache) {
+      renderBattle(parseCSV(cache.battleText));
+      renderAccounts(parseCSV(cache.accText));
+      const badge = document.querySelector('.live-indicator');
+      if (badge) badge.innerHTML = '<div class="live-dot" style="background:var(--orange)"></div> <span style="color:var(--orange)">STALE CACHE — FETCH FAILED</span>';
+    } else {
+      setLoading('⚠ FAILED TO LOAD — Ensure sheet is published publicly');
+    }
     console.error(err);
   }
 }
