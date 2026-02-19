@@ -622,9 +622,11 @@
     </div>
     <div class="header-right">
       <div class="season-badge">Season 2025</div>
-      <div class="live-indicator" id="live-indicator">
-        <div class="live-dot"></div>
-        <span style="font-family:var(--font-mono);font-size:11px;">LIVE DATA</span>
+      <div style="display:flex;align-items:center;gap:10px;justify-content:flex-end;">
+        <div class="live-indicator" id="live-indicator">
+          <div class="live-dot"></div>
+          <span style="font-family:var(--font-mono);font-size:11px;">LIVE DATA</span>
+        </div>
         <button class="refresh-btn" onclick="forceRefresh()">⟳ REFRESH</button>
       </div>
     </div>
@@ -1218,9 +1220,9 @@ async function forceRefresh() {
     saveCache(bt, at);
     renderBattle(parseCSV(bt));
     renderAccounts(parseCSV(at));
-    setStatus(`<div class="live-dot"></div> <span style="font-family:var(--font-mono);font-size:11px;color:var(--green);">LIVE · REFRESHES 02:00 WIB</span><button class="refresh-btn" onclick="forceRefresh()">⟳ REFRESH</button>`);
+    setStatus(`<div class="live-dot"></div> <span style="font-family:var(--font-mono);font-size:11px;color:var(--green);">LIVE · REFRESHES 02:00 WIB</span>`);
   } catch(err) {
-    setStatus(`<div class="live-dot" style="background:var(--red)"></div> <span style="color:var(--red);font-family:var(--font-mono);font-size:11px;">REFRESH FAILED</span><button class="refresh-btn" onclick="forceRefresh()">⟳ RETRY</button>`);
+    setStatus(`<div class="live-dot" style="background:var(--red)"></div> <span style="color:var(--red);font-family:var(--font-mono);font-size:11px;">REFRESH FAILED — CHECK CONNECTION</span>`);
     console.error(err);
   }
 }
