@@ -879,7 +879,7 @@
 <script>
 const CSV_BATTLE   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=722425499&single=true&output=csv';
 const CSV_ACCOUNTS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=1795723743&single=true&output=csv';
-const CACHE_KEY    = 'pod_hq_v3';
+const CACHE_KEY    = 'pod_hq_v4';
 
 // ── QUARTER BADGE ──────────────────────────────────────────────────
 (function() {
@@ -996,14 +996,9 @@ function pct(val) {
   if (val === null || val === undefined || val === '') return 0;
   const s = String(val).replace(/[$,\s]/g, '').trim();
   if (s === '' || s === '-' || s === 'N/A') return 0;
-  if (s.endsWith('%')) {
-    const n = parseFloat(s);
-    return isNaN(n) ? 0 : n; // already 0-100
-  }
-  const n = parseFloat(s);
-  if (isNaN(n)) return 0;
-  // Heuristic: if absolute value <= 1, treat as decimal fraction → ×100
-  return Math.abs(n) <= 1 ? n * 100 : n;
+  // Strip % sign — values come as "94.91%" from Google Sheets
+  const n = parseFloat(s.replace('%',''));
+  return isNaN(n) ? 0 : n;
 }
 
 function num(val) {
@@ -1039,12 +1034,10 @@ function renderBattle(rows) {
   if (rows[0]) console.log('Battle row sample:', rows[0]);
 
   const scored = rows.map(pod => {
-    // Try multiple possible column names for each field
-    const rev     = pct(g(pod, 'Revision%', 'Revision %', 'Revision'));
-    const backlog = pct(g(pod, 'Backlog Completion%', 'Backlog Completion %', 'Backlog Completion', 'Backlog'));
-    const adperf  = pct(g(pod, 'Ad Performance Score', 'Ad Performance', 'AdPerformanceScore'));
+    const rev     = pct(pod['Revision%'] || pod['Revision'] || '');
+    const backlog = pct(pod['Backlog Completion%'] || pod['Backlog Completion'] || '');
+    const adperf  = pct(pod['Ad Performance Score'] || pod['Ad Performance'] || '');
     const score   = calcScore(rev, backlog, adperf);
-    console.log(`Pod ${g(pod,'Pod')}: rev=${rev} backlog=${backlog} adperf=${adperf} score=${score}`);
     return { pod, rev, backlog, adperf, score };
   }).sort((a,b) => b.score - a.score);
 
@@ -1052,14 +1045,14 @@ function renderBattle(rows) {
   grid.innerHTML = '';
   scored.forEach(({pod, rev, backlog, adperf, score}, i) => {
     const rank = i+1, m = rankMeta(rank);
-    const members = g(pod,'Members') || '—';
+    const members = pod['Members'] || '—';
     grid.innerHTML += `
       <div class="pod-card ${m.cls}">
         <div class="corner-deco tl"></div><div class="corner-deco tr"></div>
         <div class="pod-header">
           <div class="pod-name-block">
             <div class="pod-label">Rank</div>
-            <div class="pod-name">POD ${g(pod,'Pod')}</div>
+            <div class="pod-name">POD ${pod['Pod']}</div>
           </div>
           <div class="pod-badge"><div class="badge-icon">${m.icon}</div><div class="badge-label">${m.label}</div></div>
           <div class="pod-rank">${rank}</div>
@@ -1101,12 +1094,12 @@ function renderBattle(rows) {
   const tbody = document.getElementById('battle-tbody');
   tbody.innerHTML = '';
   scored.forEach(({pod, rev, backlog, adperf, score}, i) => {
-    const rank = i+1, m = rankMeta(rank), pl = g(pod,'Pod');
+    const rank = i+1, m = rankMeta(rank), pl = pod['Pod'] || '';
     tbody.innerHTML += `
       <tr>
         <td class="rank-cell ${m.nameCls}">${rank}</td>
         <td><span class="pod-chip pod-${pl.toLowerCase()}">POD ${pl}</span></td>
-        <td>${g(pod,'Members')}</td>
+        <td>${pod['Members'] || ''}</td>
         <td>${rev.toFixed(2)}%</td>
         <td>${backlog.toFixed(2)}%</td>
         <td>${adperf.toFixed(0)}%</td>
@@ -1135,20 +1128,20 @@ function renderAccountRows() {
     return;
   }
   rows.forEach(a => {
-    const pod = g(a,'Pod');
-    const slm = pct(g(a,'Scoring Last Month','ScoringLastMonth'));
-    const stm = pct(g(a,'Scoring This Month','ScoringThisMonth'));
-    const ilm = num(g(a,'Index Last Month','IndexLastMonth'));
-    const itm = num(g(a,'Index This Month','IndexThisMonth'));
-    const trend = g(a,'Trend Arrow','TrendArrow') || '';
+    const pod = a['Pod'] || '';
+    const slm = pct(a['Scoring Last Month'] || '');
+    const stm = pct(a['Scoring This Month'] || '');
+    const ilm = num(a['Index Last Month'] || '');
+    const itm = num(a['Index This Month'] || '');
+    const trend = a['Trend Arrow'] || '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><strong style="color:var(--white)">${g(a,'Client')}</strong></td>
+      <td><strong style="color:var(--white)">${a['Client'] || ''}</strong></td>
       <td><span class="pod-chip ${podClass(pod)}">POD ${pod}</span></td>
-      <td style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">${g(a,'Metric Type','MetricType')}</td>
-      <td style="font-size:12px;color:var(--muted)">${g(a,'Target Text','TargetText')}</td>
-      <td style="font-family:var(--font-mono);font-size:13px">${g(a,'Last Month','LastMonth')}</td>
-      <td style="font-family:var(--font-mono);font-size:13px">${g(a,'This Month','ThisMonth')}</td>
+      <td style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">${a['Metric Type'] || ''}</td>
+      <td style="font-size:12px;color:var(--muted)">${a['Target Text'] || ''}</td>
+      <td style="font-family:var(--font-mono);font-size:13px">${a['Last Month'] || ''}</td>
+      <td style="font-family:var(--font-mono);font-size:13px">${a['This Month'] || ''}</td>
       <td class="index-val">${ilm.toFixed(2)}</td>
       <td class="index-val">${itm.toFixed(2)}</td>
       <td><span class="score-num ${scoreClass(slm)}">${slm.toFixed(1)}%</span></td>
