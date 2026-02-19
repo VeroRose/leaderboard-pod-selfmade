@@ -104,6 +104,19 @@
     display: flex; align-items: center; gap: 6px; justify-content: flex-end;
     font-family: var(--font-mono); font-size: 11px; color: var(--green);
   }
+  .refresh-btn {
+    margin-left: 10px;
+    padding: 3px 10px;
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 2px;
+    background: transparent; border: 1px solid var(--border-bright);
+    color: var(--muted); cursor: pointer; text-transform: uppercase;
+    transition: all 0.2s;
+  }
+  .refresh-btn:hover {
+    border-color: var(--cyan); color: var(--cyan);
+    box-shadow: 0 0 8px rgba(0,212,255,0.2);
+  }
+  .refresh-btn:active { transform: scale(0.96); }
   .live-dot {
     width: 7px; height: 7px; border-radius: 50%; background: var(--green);
     animation: blink 1.2s ease-in-out infinite;
@@ -609,9 +622,10 @@
     </div>
     <div class="header-right">
       <div class="season-badge">Season 2025</div>
-      <div class="live-indicator">
+      <div class="live-indicator" id="live-indicator">
         <div class="live-dot"></div>
-        LIVE DATA
+        <span style="font-family:var(--font-mono);font-size:11px;">LIVE DATA</span>
+        <button class="refresh-btn" onclick="forceRefresh()">⟳ REFRESH</button>
       </div>
     </div>
   </div>
@@ -1070,8 +1084,11 @@ function renderBattle(rows) {
         </div>
         <div class="pod-stats">
           <div class="stat-row">
-            <div class="stat-header"><span class="stat-name">Revision %</span><span class="stat-val">${rev.toFixed(2)}%</span></div>
-            <div class="bar-track"><div class="bar-fill" style="width:${Math.min(rev,100)}%"></div></div>
+            <div class="stat-header">
+              <span class="stat-name">Revision % <span style="font-family:var(--font-mono);font-size:9px;color:var(--red);letter-spacing:1px;margin-left:4px;">↓ LOWER IS BETTER</span></span>
+              <span class="stat-val">${rev.toFixed(2)}%</span>
+            </div>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.min(rev,100)}%;background:linear-gradient(90deg,#28a860,#e03030) !important;"></div></div>
           </div>
           <div class="stat-row">
             <div class="stat-header"><span class="stat-name">Backlog Completion</span><span class="stat-val">${backlog.toFixed(2)}%</span></div>
@@ -1190,6 +1207,24 @@ function setLoading(msg) {
 }
 
 // ── INIT ───────────────────────────────────────────────────────────
+async function forceRefresh() {
+  const btn = document.querySelector('.refresh-btn');
+  if (btn) { btn.textContent = '⟳ SYNCING...'; btn.style.color = 'var(--cyan)'; }
+  localStorage.removeItem(CACHE_KEY);
+  setLoading('⟳ FORCE REFRESHING...');
+  try {
+    const [br, ar] = await Promise.all([fetch(CSV_BATTLE), fetch(CSV_ACCOUNTS)]);
+    const [bt, at] = await Promise.all([br.text(), ar.text()]);
+    saveCache(bt, at);
+    renderBattle(parseCSV(bt));
+    renderAccounts(parseCSV(at));
+    setStatus(`<div class="live-dot"></div> <span style="font-family:var(--font-mono);font-size:11px;color:var(--green);">LIVE · REFRESHES 02:00 WIB</span><button class="refresh-btn" onclick="forceRefresh()">⟳ REFRESH</button>`);
+  } catch(err) {
+    setStatus(`<div class="live-dot" style="background:var(--red)"></div> <span style="color:var(--red);font-family:var(--font-mono);font-size:11px;">REFRESH FAILED</span><button class="refresh-btn" onclick="forceRefresh()">⟳ RETRY</button>`);
+    console.error(err);
+  }
+}
+
 async function init() {
   // Instant render from cache if still valid (refreshes at 2am WIB)
   if (isCacheValid()) {
