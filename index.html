@@ -722,6 +722,36 @@
 const CSV_BATTLE   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=722425499&single=true&output=csv';
 const CSV_ACCOUNTS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=1795723743&single=true&output=csv';
 
+// ── CACHE CONFIG ───────────────────────────────────────────────────
+// Change CACHE_VER any time you want to force everyone to re-fetch
+// (e.g. after updating the sheet structure)
+const CACHE_VER     = 'v1';
+const CACHE_KEY     = 'pod_hq_cache_' + CACHE_VER;
+const CACHE_TTL_MS  = 30 * 60 * 1000; // 30 minutes
+
+// ── CACHE HELPERS ──────────────────────────────────────────────────
+function cacheLoad() {
+  try {
+    var raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    var c = JSON.parse(raw);
+    var age = Date.now() - c.ts;
+    if (age > CACHE_TTL_MS) { localStorage.removeItem(CACHE_KEY); return null; }
+    return c;
+  } catch(e) { return null; }
+}
+
+function cacheSave(bt, at) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ bt: bt, at: at, ts: Date.now() }));
+  } catch(e) {} // ignore if storage full
+}
+
+function cacheAge(ts) {
+  var mins = Math.floor((Date.now() - ts) / 60000);
+  return mins < 1 ? 'just now' : mins + 'm ago';
+}
+
 // ── QUARTER BADGE ──────────────────────────────────────────────────
 (function() {
   const now = new Date();
@@ -962,6 +992,7 @@ async function fetchData() {
     fetch(CSV_ACCOUNTS + bust, { cache: 'no-store' })
   ]);
   var [bt, at] = await Promise.all([br.text(), ar.text()]);
+  cacheSave(bt, at);
   return { bt: bt, at: at };
 }
 
@@ -982,8 +1013,26 @@ async function forceRefresh() {
   }
 }
 
-// ── INIT ───────────────────────────────────────────────────────────
+// ── INIT: cache-first, fetch in background if stale ───────────────
 async function init() {
+  var cached = cacheLoad();
+  if (cached) {
+    // Instant render from cache
+    renderBattle(parseCSV(cached.bt));
+    renderAccounts(parseCSV(cached.at));
+    setStatus('<div class="live-dot" style="background:var(--gold)"></div><span style="font-family:var(--font-mono);font-size:11px;color:var(--gold);">CACHED \u00B7 ' + cacheAge(cached.ts) + ' \u00B7 REFRESHES EVERY 30 MIN</span>');
+    // Silently refresh in background if older than 10 mins
+    var age = Date.now() - cached.ts;
+    if (age > 10 * 60 * 1000) {
+      fetchData().then(function(data) {
+        renderBattle(parseCSV(data.bt));
+        renderAccounts(parseCSV(data.at));
+        setStatus('<div class="live-dot"></div><span style="font-family:var(--font-mono);font-size:11px;color:var(--green);">LIVE \u00B7 UPDATED ' + nowWIB() + ' WIB</span>');
+      }).catch(function() {}); // silent fail — keep showing cached
+    }
+    return;
+  }
+  // No cache — fetch and show loading
   setLoading('\u27F3 LOADING LIVE DATA...');
   try {
     var data = await fetchData();
