@@ -893,7 +893,7 @@
 <script>
 const CSV_BATTLE   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=722425499&single=true&output=csv';
 const CSV_ACCOUNTS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=1795723743&single=true&output=csv';
-const CACHE_KEY    = 'pod_hq_v6';
+const CACHE_KEY    = 'pod_hq_v7';
 
 // ── QUARTER BADGE ──────────────────────────────────────────────────
 (function() {
@@ -1055,7 +1055,8 @@ function renderBattle(rows) {
     const rev     = pct(pod['Revision%'] || pod['Revision'] || '');
     const backlog = pct(pod['Backlog Completion%'] || pod['Backlog Completion'] || '');
     const adperf  = pct(pod['Ad Performance Score'] || pod['Ad Performance'] || '');
-    const score   = calcScore(rev, backlog, adperf);
+    // Use the Score column directly from the sheet — it's already computed correctly there
+    const score   = pct(pod['Score'] || '');
     return { pod, rev, backlog, adperf, score };
   }).sort((a,b) => b.score - a.score);
 
@@ -1230,7 +1231,12 @@ async function forceRefresh() {
   localStorage.removeItem(CACHE_KEY);
   setLoading('⟳ FORCE REFRESHING...');
   try {
-    const [br, ar] = await Promise.all([fetch(CSV_BATTLE), fetch(CSV_ACCOUNTS)]);
+    // Cache-bust with timestamp to force Google to serve fresh CSV
+    const bust = `&cachebust=${Date.now()}`;
+    const [br, ar] = await Promise.all([
+      fetch(CSV_BATTLE   + bust, { cache: 'no-store' }),
+      fetch(CSV_ACCOUNTS + bust, { cache: 'no-store' })
+    ]);
     const [bt, at] = await Promise.all([br.text(), ar.text()]);
     saveCache(bt, at);
     renderBattle(parseCSV(bt));
@@ -1261,7 +1267,11 @@ async function init() {
   // Fetch fresh
   setLoading('⟳ SYNCING LIVE DATA...');
   try {
-    const [br, ar] = await Promise.all([fetch(CSV_BATTLE), fetch(CSV_ACCOUNTS)]);
+    const bust = `&cachebust=${Date.now()}`;
+    const [br, ar] = await Promise.all([
+      fetch(CSV_BATTLE   + bust, { cache: 'no-store' }),
+      fetch(CSV_ACCOUNTS + bust, { cache: 'no-store' })
+    ]);
     const [bt, at] = await Promise.all([br.text(), ar.text()]);
     saveCache(bt, at);
     renderBattle(parseCSV(bt));
