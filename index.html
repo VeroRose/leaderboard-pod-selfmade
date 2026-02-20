@@ -893,7 +893,7 @@
 <script>
 const CSV_BATTLE   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=722425499&single=true&output=csv';
 const CSV_ACCOUNTS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=1795723743&single=true&output=csv';
-const CACHE_KEY    = 'pod_hq_v4';
+const CACHE_KEY    = 'pod_hq_v6';
 
 // ── QUARTER BADGE ──────────────────────────────────────────────────
 (function() {
@@ -913,26 +913,30 @@ function switchTab(tab) {
 // ── WIB 2AM CACHE ─────────────────────────────────────────────────
 // Returns the most recent WIB (UTC+7) 2am as a UTC timestamp
 function getLastWIB2am() {
+  // 2am WIB = UTC+7, so 2am WIB = 19:00 UTC previous day
   const now = new Date();
-  const wibNow = new Date(now.getTime() + 7 * 60 * 60 * 1000); // shift to WIB
-  // Build today's 2am WIB in UTC
-  const y = wibNow.getUTCFullYear(), mo = wibNow.getUTCMonth(), d = wibNow.getUTCDate();
-  let cutoff = new Date(Date.UTC(y, mo, d, 2 - 7 + 24, 0, 0)); // 2am WIB = 19:00 UTC prev day
-  // 2am WIB = UTC 19:00 previous calendar day
-  cutoff = new Date(Date.UTC(y, mo, d - 1, 19, 0, 0));
-  // If current WIB time is past 2am today, use today's 2am
-  if (wibNow.getUTCHours() >= 2) {
-    cutoff = new Date(Date.UTC(y, mo, d, 19, 0, 0));
-    // Actually: 2am WIB = 2am - 7h = -5h UTC = previous day 19:00 UTC
-    // Let's do it cleanly:
-  }
-  // Clean approach: find today's 02:00 WIB expressed in UTC
-  const wibMidnight = new Date(Date.UTC(y, mo, d, 0, 0, 0)); // WIB midnight = UTC midnight of WIB date
-  const wib2am = new Date(wibMidnight.getTime() - 7 * 3600000 + 2 * 3600000); // convert WIB->UTC
-  // If wib2am is in the future, use yesterday's
-  return wib2am > now ? new Date(wib2am.getTime() - 86400000) : wib2am;
-}
+  // Get current date in WIB by offsetting UTC
+  const wibOffset = 7 * 60; // minutes
+  const wibNow = new Date(now.getTime() + wibOffset * 60000);
+  const y  = wibNow.getUTCFullYear();
+  const mo = wibNow.getUTCMonth();
+  const d  = wibNow.getUTCDate();
+  const h  = wibNow.getUTCHours();
+  const m  = wibNow.getUTCMinutes();
 
+  // 2am WIB in UTC = 19:00 UTC of the PREVIOUS calendar day
+  // If WIB time >= 02:00 → last cutoff was today's 2am WIB = yesterday UTC 19:00
+  // If WIB time <  02:00 → last cutoff was yesterday's 2am WIB = 2 days ago UTC 19:00
+  let cutoffUTCDay;
+  if (h > 2 || (h === 2 && m >= 0)) {
+    // Past 2am WIB today — cutoff is today's 2am WIB = UTC d-1 at 19:00
+    cutoffUTCDay = new Date(Date.UTC(y, mo, d - 1, 19, 0, 0));
+  } else {
+    // Before 2am WIB today — cutoff is yesterday's 2am WIB = UTC d-2 at 19:00
+    cutoffUTCDay = new Date(Date.UTC(y, mo, d - 2, 19, 0, 0));
+  }
+  return cutoffUTCDay;
+}
 function isCacheValid() {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
@@ -1139,7 +1143,13 @@ function setPodFilter(pod) {
 function renderAccountRows() {
   const tbody = document.getElementById('acc-tbody');
   tbody.innerHTML = '';
-  const rows = activePod === 'ALL' ? allAccRows : allAccRows.filter(a => g(a,'Pod') === activePod);
+  // Trim keys/values to avoid whitespace mismatches from CSV
+  const cleaned = allAccRows.map(a => {
+    const obj = {};
+    Object.keys(a).forEach(k => { obj[k.trim()] = (a[k] || '').trim(); });
+    return obj;
+  });
+  const rows = activePod === 'ALL' ? cleaned : cleaned.filter(a => a['Pod'] === activePod);
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="9" style="padding:24px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">NO DATA FOR POD ${activePod}</td></tr>`;
     return;
@@ -1148,9 +1158,8 @@ function renderAccountRows() {
     const pod = a['Pod'] || '';
     const slm = pct(a['Scoring Last Month'] || '');
     const stm = pct(a['Scoring This Month'] || '');
-    const ilm = num(a['Index Last Month'] || '');
-    const itm = num(a['Index This Month'] || '');
     const trend = a['Trend Arrow'] || '';
+    const isUp = trend === '\u2191' || trend.toLowerCase().includes('up') || trend.includes('\u25b2');
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><strong style="color:var(--white)">${a['Client'] || ''}</strong></td>
@@ -1161,18 +1170,19 @@ function renderAccountRows() {
       <td style="font-family:var(--font-mono);font-size:13px">${a['This Month'] || ''}</td>
       <td><span class="score-num ${scoreClass(slm)}">${slm.toFixed(1)}%</span></td>
       <td><span class="score-num ${scoreClass(stm)}">${stm.toFixed(1)}%</span></td>
-      <td class="${
-        trend.includes('↑') || trend.includes('up') || trend.includes('▲') ? 'trend-up' : 'trend-dn'
-      }">${
-        trend.includes('↑') || trend.includes('up') || trend.includes('▲') ? '↑' : '↓'
-      }</td>`;
+      <td class="${isUp ? 'trend-up' : 'trend-dn'}">${isUp ? '\u2191' : '\u2193'}</td>`;
     tbody.appendChild(tr);
   });
 }
 
 function renderAccounts(rows) {
-  allAccRows = rows;
-  if (rows[0]) console.log('Account row sample:', rows[0]);
+  // Trim all keys/values from CSV parsing artifacts
+  allAccRows = rows.map(a => {
+    const obj = {};
+    Object.keys(a).forEach(k => { obj[k.trim()] = (a[k] || '').trim(); });
+    return obj;
+  });
+  if (allAccRows[0]) console.log('Account row sample:', allAccRows[0]);
 
   if (!document.getElementById('pod-filter-bar')) {
     const wrap = document.querySelector('.acc-table-wrap');
@@ -1209,9 +1219,14 @@ function setLoading(msg) {
 }
 
 // ── INIT ───────────────────────────────────────────────────────────
+function resetRefreshBtn() {
+  const btn = document.querySelector('.refresh-btn');
+  if (btn) { btn.textContent = '⟳ REFRESH'; btn.style.color = ''; btn.disabled = false; }
+}
+
 async function forceRefresh() {
   const btn = document.querySelector('.refresh-btn');
-  if (btn) { btn.textContent = '⟳ SYNCING...'; btn.style.color = 'var(--cyan)'; }
+  if (btn) { btn.textContent = '⟳ SYNCING...'; btn.style.color = 'var(--cyan)'; btn.disabled = true; }
   localStorage.removeItem(CACHE_KEY);
   setLoading('⟳ FORCE REFRESHING...');
   try {
@@ -1224,6 +1239,8 @@ async function forceRefresh() {
   } catch(err) {
     setStatus(`<div class="live-dot" style="background:var(--red)"></div> <span style="color:var(--red);font-family:var(--font-mono);font-size:11px;">REFRESH FAILED — CHECK CONNECTION</span>`);
     console.error(err);
+  } finally {
+    resetRefreshBtn();
   }
 }
 
