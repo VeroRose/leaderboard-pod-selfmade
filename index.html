@@ -396,6 +396,34 @@
   .trend-up { color: var(--green); font-size: 16px; }
   .trend-dn { color: var(--red); font-size: 16px; }
 
+  .status-badge {
+    display: inline-block; padding: 2px 9px;
+    font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+    border-radius: 2px; letter-spacing: 1px; text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .status-active   { background: rgba(61,220,132,0.12); color: var(--green);  border: 1px solid rgba(61,220,132,0.3); }
+  .status-churned  { background: rgba(224,48,48,0.12);  color: var(--red);    border: 1px solid rgba(224,48,48,0.3);  }
+  .status-inactive { background: rgba(107,128,144,0.15);color: var(--muted);  border: 1px solid rgba(107,128,144,0.3);}
+
+  /* CHURN / SHOUTOUT badges on pod card */
+  .pod-meta-row {
+    padding: 8px 20px;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0,0,0,0.15);
+  }
+  .meta-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px;
+    font-family: var(--font-mono); font-size: 9px; letter-spacing: 1px;
+    border-radius: 2px; text-transform: uppercase;
+  }
+  .meta-churn  { background: rgba(224,48,48,0.12);  color: var(--red);    border: 1px solid rgba(224,48,48,0.3);  }
+  .meta-shout  { background: rgba(0,212,255,0.10);  color: var(--cyan);   border: 1px solid rgba(0,212,255,0.25); }
+  .meta-buff   { background: rgba(61,220,132,0.10); color: var(--green);  border: 1px solid rgba(61,220,132,0.25);}
+  .meta-none   { color: var(--muted); font-family: var(--font-mono); font-size: 9px; letter-spacing: 1px; }
+
   .index-val {
     font-family: var(--font-mono); font-size: 12px; color: var(--muted);
   }
@@ -653,7 +681,7 @@
         </div>
         <div class="prize-text">
           <div class="prize-eyebrow">Winner Takes All • Quarterly Prize</div>
-          <div class="prize-headline">$1,000 PRIZE</div>
+          <div class="prize-headline">$X PRIZE</div>
           <div class="prize-sub">Awarded to <span>Top Performing Pod</span> — Best Pod Every Quarter Takes Home the Prize.</div>
         </div>
       </div>
@@ -708,6 +736,7 @@
             <th>Score LM</th>
             <th>Score TM</th>
             <th>Trend</th>
+            <th>Status</th>
           </tr>
         </thead>
         <tbody id="acc-tbody">
@@ -725,7 +754,7 @@ const CSV_ACCOUNTS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6Hy
 // ── CACHE CONFIG ───────────────────────────────────────────────────
 // Change CACHE_VER any time you want to force everyone to re-fetch
 // (e.g. after updating the sheet structure)
-const CACHE_VER     = 'v1';
+const CACHE_VER     = 'v2';
 const CACHE_KEY     = 'pod_hq_cache_' + CACHE_VER;
 const CACHE_TTL_MS  = 30 * 60 * 1000; // 30 minutes
 
@@ -818,8 +847,20 @@ function renderBattle(rows) {
     var rev     = pct(pod['Revision%']           || pod['Revision'] || '');
     var backlog = pct(pod['Backlog Completion%']  || pod['Backlog Completion'] || '');
     var adperf  = pct(pod['Ad Performance Score'] || pod['Ad Performance'] || '');
-    var score   = pct(pod['Score'] || '');  // READ DIRECTLY FROM SHEET
-    return { pod: pod, rev: rev, backlog: backlog, adperf: adperf, score: score };
+    var baseScore = pct(pod['Score'] || '');  // READ DIRECTLY FROM SHEET
+
+    // Shoutout buff: +1% per every 3 shoutouts
+    var shoutouts = parseInt(pod['Shoutout'] || pod['Shoutouts'] || '0', 10) || 0;
+    var buffCount = Math.floor(shoutouts / 3);
+    var buffPct   = buffCount * 1;
+    var score     = baseScore + buffPct;
+
+    // Churn count
+    var churn = parseInt(pod['Churn'] || '0', 10) || 0;
+
+    return { pod: pod, rev: rev, backlog: backlog, adperf: adperf,
+             baseScore: baseScore, score: score,
+             shoutouts: shoutouts, buffPct: buffPct, churn: churn };
   }).sort(function(a, b) { return b.score - a.score; });
 
   var grid = document.querySelector('.battle-grid');
@@ -827,6 +868,30 @@ function renderBattle(rows) {
   scored.forEach(function(d, i) {
     var rank = i + 1, m = rankMeta(rank);
     var members = d.pod['Members'] || '—';
+
+    // Build churn / shoutout meta row content
+    var metaHtml = '';
+    if (d.churn > 0) {
+      metaHtml += '<span class="meta-badge meta-churn">⚠ ' + d.churn + ' CHURN</span>';
+    }
+    if (d.shoutouts > 0) {
+      metaHtml += '<span class="meta-badge meta-shout">⭐ ' + d.shoutouts + ' SHOUTOUT' + (d.shoutouts !== 1 ? 'S' : '') + '</span>';
+    }
+    if (d.buffPct > 0) {
+      metaHtml += '<span class="meta-badge meta-buff">+' + d.buffPct.toFixed(0) + '% BUFF APPLIED</span>';
+    }
+    if (!metaHtml) {
+      metaHtml = '<span class="meta-none">— NO EXTRAS</span>';
+    }
+
+    // Score display: show base + buff if buff applied
+    var scoreDisplay = d.buffPct > 0
+      ? d.score.toFixed(2) + '%'
+      : d.score.toFixed(2) + '%';
+    var scoreSubHtml = d.buffPct > 0
+      ? '<div style="font-family:var(--font-mono);font-size:10px;color:var(--cyan);letter-spacing:1px;margin-top:2px;">BASE ' + d.baseScore.toFixed(2) + '% +' + d.buffPct.toFixed(0) + '% BUFF</div>'
+      : '';
+
     grid.innerHTML += '<div class="pod-card ' + m.cls + '">' +
       '<div class="corner-deco tl"></div><div class="corner-deco tr"></div>' +
       '<div class="pod-header">' +
@@ -840,7 +905,8 @@ function renderBattle(rows) {
       '<div class="pod-score-main">' +
         '<div class="score-block">' +
           '<div class="score-label">OVERALL SCORE</div>' +
-          '<div class="score-value">' + d.score.toFixed(2) + '%</div>' +
+          '<div class="score-value">' + scoreDisplay + '</div>' +
+          scoreSubHtml +
         '</div>' +
         '<div class="members-block">' +
           '<div class="members-count">' + members + '</div>' +
@@ -850,6 +916,7 @@ function renderBattle(rows) {
           '</div>' +
         '</div>' +
       '</div>' +
+      '<div class="pod-meta-row">' + metaHtml + '</div>' +
       '<div class="pod-stats">' +
         '<div class="stat-row">' +
           '<div class="stat-header"><span class="stat-name">Revision % <span style="font-family:var(--font-mono);font-size:9px;color:var(--red);letter-spacing:1px;margin-left:4px;">↓ LOWER IS BETTER</span></span><span class="stat-val">' + d.rev.toFixed(2) + '%</span></div>' +
@@ -875,14 +942,16 @@ function renderBattle(rows) {
   tbody.innerHTML = '';
   scored.forEach(function(d, i) {
     var rank = i + 1, m = rankMeta(rank), pl = d.pod['Pod'] || '';
+    var buffBadge = d.buffPct > 0 ? ' <span style="font-family:var(--font-mono);font-size:9px;color:var(--cyan);">+' + d.buffPct.toFixed(0) + '%</span>' : '';
+    var churnBadge = d.churn > 0 ? ' <span style="font-family:var(--font-mono);font-size:9px;color:var(--red);">⚠' + d.churn + '</span>' : '';
     tbody.innerHTML += '<tr>' +
       '<td class="rank-cell ' + m.nameCls + '">' + rank + '</td>' +
       '<td><span class="pod-chip pod-' + pl.toLowerCase() + '">POD ' + pl + '</span></td>' +
-      '<td>' + (d.pod['Members'] || '') + '</td>' +
+      '<td>' + (d.pod['Members'] || '') + churnBadge + '</td>' +
       '<td>' + d.rev.toFixed(2) + '%</td>' +
       '<td>' + d.backlog.toFixed(2) + '%</td>' +
       '<td>' + d.adperf.toFixed(0) + '%</td>' +
-      '<td style="text-align:right"><span class="score-pill ' + m.pillCls + '">' + d.score.toFixed(2) + '%</span></td>' +
+      '<td style="text-align:right"><span class="score-pill ' + m.pillCls + '">' + d.score.toFixed(2) + '%' + buffBadge + '</span></td>' +
     '</tr>';
   });
 }
@@ -909,7 +978,7 @@ function renderAccountRows() {
   });
   var rows = activePod === 'ALL' ? cleaned : cleaned.filter(function(a) { return a['Pod'] === activePod; });
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">NO DATA FOR POD ' + activePod + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="padding:24px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">NO DATA FOR POD ' + activePod + '</td></tr>';
     return;
   }
   rows.forEach(function(a) {
@@ -918,6 +987,10 @@ function renderAccountRows() {
     var stm   = pct(a['Scoring This Month'] || '');
     var trend = a['Trend Arrow'] || '';
     var isUp  = trend === '\u2191' || trend.toLowerCase().includes('up') || trend.includes('\u25b2');
+    var status = (a['Status'] || '').trim();
+    var statusLow = status.toLowerCase();
+    var statusCls = statusLow === 'active' ? 'status-active' : statusLow === 'churned' ? 'status-churned' : 'status-inactive';
+    var statusLabel = status || '—';
     var tr = document.createElement('tr');
     tr.innerHTML =
       '<td><strong style="color:var(--white)">' + (a['Client'] || '') + '</strong></td>' +
@@ -928,7 +1001,8 @@ function renderAccountRows() {
       '<td style="font-family:var(--font-mono);font-size:13px">' + (a['This Month'] || '') + '</td>' +
       '<td><span class="score-num ' + scoreClass(slm) + '">' + slm.toFixed(1) + '%</span></td>' +
       '<td><span class="score-num ' + scoreClass(stm) + '">' + stm.toFixed(1) + '%</span></td>' +
-      '<td class="' + (isUp ? 'trend-up' : 'trend-dn') + '">' + (isUp ? '\u2191' : '\u2193') + '</td>';
+      '<td class="' + (isUp ? 'trend-up' : 'trend-dn') + '">' + (isUp ? '\u2191' : '\u2193') + '</td>' +
+      '<td><span class="status-badge ' + statusCls + '">' + statusLabel + '</span></td>';
     tbody.appendChild(tr);
   });
 }
@@ -972,7 +1046,7 @@ function setLoading(msg) {
   document.querySelector('.battle-grid').innerHTML =
     '<div style="grid-column:1/-1;padding:40px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:3px;">' + msg + '</div>';
   document.getElementById('acc-tbody').innerHTML =
-    '<tr><td colspan="9" style="padding:30px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">' + msg + '</td></tr>';
+    '<tr><td colspan="10" style="padding:30px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">' + msg + '</td></tr>';
 }
 
 function resetRefreshBtn() {
