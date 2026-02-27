@@ -104,19 +104,7 @@
     display: flex; align-items: center; gap: 6px; justify-content: flex-end;
     font-family: var(--font-mono); font-size: 11px; color: var(--green);
   }
-  .refresh-btn {
-    margin-left: 10px;
-    padding: 3px 10px;
-    font-family: var(--font-mono); font-size: 10px; letter-spacing: 2px;
-    background: transparent; border: 1px solid var(--border-bright);
-    color: var(--muted); cursor: pointer; text-transform: uppercase;
-    transition: all 0.2s;
-  }
-  .refresh-btn:hover {
-    border-color: var(--cyan); color: var(--cyan);
-    box-shadow: 0 0 8px rgba(0,212,255,0.2);
-  }
-  .refresh-btn:active { transform: scale(0.96); }
+
   .live-dot {
     width: 7px; height: 7px; border-radius: 50%; background: var(--green);
     animation: blink 1.2s ease-in-out infinite;
@@ -650,12 +638,9 @@
     </div>
     <div class="header-right">
       <div class="season-badge">Season 2025</div>
-      <div style="display:flex;align-items:center;gap:10px;justify-content:flex-end;">
-        <div class="live-indicator" id="live-indicator">
-          <div class="live-dot"></div>
-          <span style="font-family:var(--font-mono);font-size:11px;">LIVE DATA</span>
-        </div>
-        <button class="refresh-btn" onclick="forceRefresh()">⟳ REFRESH</button>
+      <div class="live-indicator" id="live-indicator">
+        <div class="live-dot"></div>
+        <span style="font-family:var(--font-mono);font-size:11px;">LOADING...</span>
       </div>
     </div>
   </div>
@@ -750,36 +735,74 @@
 <script>
 const CSV_BATTLE   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=722425499&single=true&output=csv';
 const CSV_ACCOUNTS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=1795723743&single=true&output=csv';
+const DATA_JSON    = './data.json';
 
-// ── CACHE CONFIG ───────────────────────────────────────────────────
-// Change CACHE_VER any time you want to force everyone to re-fetch
-// (e.g. after updating the sheet structure)
-const CACHE_VER     = 'v2';
-const CACHE_KEY     = 'pod_hq_cache_' + CACHE_VER;
-const CACHE_TTL_MS  = 30 * 60 * 1000; // 30 minutes
+// ── STATUS HELPERS ─────────────────────────────────────────────────
+function setStatus(html) {
+  var el = document.getElementById('live-indicator');
+  if (el) el.innerHTML = html;
+}
 
-// ── CACHE HELPERS ──────────────────────────────────────────────────
-function cacheLoad() {
+function setLoading(msg) {
+  document.querySelector('.battle-grid').innerHTML =
+    '<div style="grid-column:1/-1;padding:40px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:3px;">' + msg + '</div>';
+  document.getElementById('acc-tbody').innerHTML =
+    '<tr><td colspan="10" style="padding:30px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">' + msg + '</td></tr>';
+}
+
+function fmtWIB(iso) {
+  var d = iso ? new Date(iso) : new Date();
+  return d.toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+    timeZone: 'Asia/Jakarta'
+  }) + ' WIB';
+}
+
+// ── INIT: load data.json instantly (pre-built by GitHub Actions 2am WIB) ──
+async function init() {
+  setLoading('\u27F3 LOADING...');
   try {
-    var raw = localStorage.getItem(CACHE_KEY);
-    if (!raw) return null;
-    var c = JSON.parse(raw);
-    var age = Date.now() - c.ts;
-    if (age > CACHE_TTL_MS) { localStorage.removeItem(CACHE_KEY); return null; }
-    return c;
-  } catch(e) { return null; }
+    // PRIMARY: load static data.json — instant for all users, zero Google Sheets latency
+    var res = await fetch(DATA_JSON + '?v=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) throw new Error('data.json not available (HTTP ' + res.status + ')');
+    var data = await res.json();
+    renderBattle(data.battle);
+    renderAccounts(data.accounts);
+    setStatus(
+      '<div class="live-dot" style="background:var(--gold);animation:none;opacity:1;"></div>' +
+      '<span style="font-family:var(--font-mono);font-size:11px;color:var(--gold);">' +
+        '\u2605 AS OF ' + fmtWIB(data.updated) + ' \u00B7 NEXT REFRESH 02:00 WIB' +
+      '</span>'
+    );
+  } catch(err) {
+    // FALLBACK: data.json doesn't exist yet — fetch live from Google Sheets
+    console.warn('data.json not found, falling back to live fetch:', err.message);
+    setLoading('\u27F3 FETCHING LIVE DATA...');
+    try {
+      var bust = '&cachebust=' + Date.now();
+      var responses = await Promise.all([
+        fetch(CSV_BATTLE   + bust, { cache: 'no-store' }),
+        fetch(CSV_ACCOUNTS + bust, { cache: 'no-store' })
+      ]);
+      var texts = await Promise.all([responses[0].text(), responses[1].text()]);
+      renderBattle(parseCSV(texts[0]));
+      renderAccounts(parseCSV(texts[1]));
+      setStatus(
+        '<div class="live-dot"></div>' +
+        '<span style="font-family:var(--font-mono);font-size:11px;color:var(--green);">' +
+          '\u26A1 LIVE \u00B7 DATA AS OF ' + fmtWIB() +
+        '</span>'
+      );
+    } catch(err2) {
+      setLoading('\u26A0 FAILED TO LOAD \u2014 Ensure sheet is published publicly');
+      setStatus('<div class="live-dot" style="background:var(--red)"></div><span style="color:var(--red);font-family:var(--font-mono);font-size:11px;">LOAD FAILED</span>');
+      console.error(err2);
+    }
+  }
 }
 
-function cacheSave(bt, at) {
-  try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ bt: bt, at: at, ts: Date.now() }));
-  } catch(e) {} // ignore if storage full
-}
-
-function cacheAge(ts) {
-  var mins = Math.floor((Date.now() - ts) / 60000);
-  return mins < 1 ? 'just now' : mins + 'm ago';
-}
+init();
 
 // ── QUARTER BADGE ──────────────────────────────────────────────────
 (function() {
@@ -942,16 +965,14 @@ function renderBattle(rows) {
   tbody.innerHTML = '';
   scored.forEach(function(d, i) {
     var rank = i + 1, m = rankMeta(rank), pl = d.pod['Pod'] || '';
-    var buffBadge = d.buffPct > 0 ? ' <span style="font-family:var(--font-mono);font-size:9px;color:var(--cyan);">+' + d.buffPct.toFixed(0) + '%</span>' : '';
-    var churnBadge = d.churn > 0 ? ' <span style="font-family:var(--font-mono);font-size:9px;color:var(--red);">⚠' + d.churn + '</span>' : '';
     tbody.innerHTML += '<tr>' +
       '<td class="rank-cell ' + m.nameCls + '">' + rank + '</td>' +
       '<td><span class="pod-chip pod-' + pl.toLowerCase() + '">POD ' + pl + '</span></td>' +
-      '<td>' + (d.pod['Members'] || '') + churnBadge + '</td>' +
+      '<td>' + (d.pod['Members'] || '') + '</td>' +
       '<td>' + d.rev.toFixed(2) + '%</td>' +
       '<td>' + d.backlog.toFixed(2) + '%</td>' +
       '<td>' + d.adperf.toFixed(0) + '%</td>' +
-      '<td style="text-align:right"><span class="score-pill ' + m.pillCls + '">' + d.score.toFixed(2) + '%' + buffBadge + '</span></td>' +
+      '<td style="text-align:right"><span class="score-pill ' + m.pillCls + '">' + d.score.toFixed(2) + '%</span></td>' +
     '</tr>';
   });
 }
@@ -1034,89 +1055,6 @@ function renderAccounts(rows) {
     wrap.insertBefore(bar, wrap.firstChild);
   }
   renderAccountRows();
-}
-
-// ── STATUS / LOADING ───────────────────────────────────────────────
-function setStatus(html) {
-  var el = document.getElementById('live-indicator');
-  if (el) el.innerHTML = html;
-}
-
-function setLoading(msg) {
-  document.querySelector('.battle-grid').innerHTML =
-    '<div style="grid-column:1/-1;padding:40px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:3px;">' + msg + '</div>';
-  document.getElementById('acc-tbody').innerHTML =
-    '<tr><td colspan="10" style="padding:30px;text-align:center;font-family:var(--font-mono);color:var(--muted);letter-spacing:2px;">' + msg + '</td></tr>';
-}
-
-function resetRefreshBtn() {
-  var btn = document.querySelector('.refresh-btn');
-  if (btn) { btn.textContent = '\u27F3 REFRESH'; btn.style.color = ''; btn.disabled = false; }
-}
-
-function nowWIB() {
-  return new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', timeZone:'Asia/Jakarta' });
-}
-
-// ── FETCH FRESH DATA ───────────────────────────────────────────────
-async function fetchData() {
-  var bust = '&cachebust=' + Date.now();
-  var [br, ar] = await Promise.all([
-    fetch(CSV_BATTLE   + bust, { cache: 'no-store' }),
-    fetch(CSV_ACCOUNTS + bust, { cache: 'no-store' })
-  ]);
-  var [bt, at] = await Promise.all([br.text(), ar.text()]);
-  cacheSave(bt, at);
-  return { bt: bt, at: at };
-}
-
-// ── FORCE REFRESH ──────────────────────────────────────────────────
-async function forceRefresh() {
-  var btn = document.querySelector('.refresh-btn');
-  if (btn) { btn.textContent = '\u27F3 SYNCING...'; btn.style.color = 'var(--cyan)'; btn.disabled = true; }
-  try {
-    var data = await fetchData();
-    renderBattle(parseCSV(data.bt));
-    renderAccounts(parseCSV(data.at));
-    setStatus('<div class="live-dot"></div><span style="font-family:var(--font-mono);font-size:11px;color:var(--green);">LIVE \u00B7 UPDATED ' + nowWIB() + ' WIB</span>');
-  } catch(err) {
-    setStatus('<div class="live-dot" style="background:var(--red)"></div><span style="color:var(--red);font-family:var(--font-mono);font-size:11px;">REFRESH FAILED</span>');
-    console.error(err);
-  } finally {
-    resetRefreshBtn();
-  }
-}
-
-// ── INIT: cache-first, fetch in background if stale ───────────────
-async function init() {
-  var cached = cacheLoad();
-  if (cached) {
-    // Instant render from cache
-    renderBattle(parseCSV(cached.bt));
-    renderAccounts(parseCSV(cached.at));
-    setStatus('<div class="live-dot" style="background:var(--gold)"></div><span style="font-family:var(--font-mono);font-size:11px;color:var(--gold);">CACHED \u00B7 ' + cacheAge(cached.ts) + ' \u00B7 REFRESHES EVERY 30 MIN</span>');
-    // Silently refresh in background if older than 10 mins
-    var age = Date.now() - cached.ts;
-    if (age > 10 * 60 * 1000) {
-      fetchData().then(function(data) {
-        renderBattle(parseCSV(data.bt));
-        renderAccounts(parseCSV(data.at));
-        setStatus('<div class="live-dot"></div><span style="font-family:var(--font-mono);font-size:11px;color:var(--green);">LIVE \u00B7 UPDATED ' + nowWIB() + ' WIB</span>');
-      }).catch(function() {}); // silent fail — keep showing cached
-    }
-    return;
-  }
-  // No cache — fetch and show loading
-  setLoading('\u27F3 LOADING LIVE DATA...');
-  try {
-    var data = await fetchData();
-    renderBattle(parseCSV(data.bt));
-    renderAccounts(parseCSV(data.at));
-    setStatus('<div class="live-dot"></div><span style="font-family:var(--font-mono);font-size:11px;color:var(--green);">LIVE \u00B7 UPDATED ' + nowWIB() + ' WIB</span>');
-  } catch(err) {
-    setLoading('\u26A0 FAILED TO LOAD \u2014 Ensure sheet is published publicly');
-    console.error(err);
-  }
 }
 
 init();
