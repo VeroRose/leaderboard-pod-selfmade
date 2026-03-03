@@ -1,0 +1,53 @@
+name: Refresh Dashboard Data
+
+on:
+  schedule:
+    - cron: '0 19 * * *'   # 19:00 UTC = 02:00 WIB (UTC+7)
+  workflow_dispatch:         # Also allow manual trigger from GitHub Actions tab
+
+jobs:
+  fetch-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Fetch CSVs and write data.json
+        run: |
+          python3 << 'PYEOF'
+          import urllib.request, csv, io, json, datetime
+
+          BATTLE_URL   = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=722425499&single=true&output=csv"
+          ACCOUNTS_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQZLrrt6HycIfJzIwgfWYfQSnZxgYsXE20ElIBqr1PB6-fwtPLUk6685Ps2FrjIzKtuWKXIdsaOg5Sr/pub?gid=1795723743&single=true&output=csv"
+
+          def fetch_csv(url):
+              req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+              with urllib.request.urlopen(req) as r:
+                  text = r.read().decode("utf-8-sig")
+              reader = csv.DictReader(io.StringIO(text))
+              return [dict(row) for row in reader]
+
+          battle   = fetch_csv(BATTLE_URL)
+          accounts = fetch_csv(ACCOUNTS_URL)
+
+          # Timestamp in WIB for display
+          utc_now = datetime.datetime.utcnow()
+          data = {
+              "updated":  utc_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "battle":   battle,
+              "accounts": accounts
+          }
+
+          with open("data.json", "w") as f:
+              json.dump(data, f)
+
+          print(f"data.json written: {len(battle)} pods, {len(accounts)} accounts @ {utc_now} UTC")
+          PYEOF
+
+      - name: Commit and push data.json
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          git diff --staged --quiet || git commit -m "data: nightly refresh $(date -u +'%Y-%m-%d %H:%M UTC') = 02:00 WIB"
+          git push
