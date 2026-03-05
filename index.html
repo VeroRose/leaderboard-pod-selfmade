@@ -867,23 +867,14 @@ function rankMeta(r) {
 // ── RENDER POD BATTLE ──────────────────────────────────────────────
 function renderBattle(rows) {
   var scored = rows.map(function(pod) {
-    var rev     = pct(pod['Revision%']           || pod['Revision'] || '');
-    var backlog = pct(pod['Backlog Completion%']  || pod['Backlog Completion'] || '');
-    var adperf  = pct(pod['Ad Performance Score'] || pod['Ad Performance'] || '');
-    var baseScore = pct(pod['Score'] || '');  // READ DIRECTLY FROM SHEET
-
-    // Shoutout buff: +5% per every 3 shoutouts
+    var rev      = pct(pod['Revision%']           || pod['Revision'] || '');
+    var backlog  = pct(pod['Backlog Completion%']  || pod['Backlog Completion'] || '');
+    var adperf   = pct(pod['Ad Performance Score'] || pod['Ad Performance'] || '');
+    var score    = pct(pod['Score'] || '');       // final score — sheet already calculated this
     var shoutouts = parseInt(pod['Shoutout'] || pod['Shoutouts'] || '0', 10) || 0;
-    var buffCount = Math.floor(shoutouts / 3);
-    var buffPct   = buffCount * 5;
-    var score     = baseScore + buffPct;
-
-    // Churn count
-    var churn = parseInt(pod['Churn'] || '0', 10) || 0;
-
+    var churn    = parseInt(pod['Churn'] || '0', 10) || 0;
     return { pod: pod, rev: rev, backlog: backlog, adperf: adperf,
-             baseScore: baseScore, score: score,
-             shoutouts: shoutouts, buffPct: buffPct, churn: churn };
+             score: score, shoutouts: shoutouts, churn: churn };
   }).sort(function(a, b) { return b.score - a.score; });
 
   var grid = document.querySelector('.battle-grid');
@@ -892,7 +883,7 @@ function renderBattle(rows) {
     var rank = i + 1, m = rankMeta(rank);
     var members = d.pod['Members'] || '—';
 
-    // Build churn / shoutout meta row content
+    // Meta row: churn + shoutout — display only, no calculations
     var metaHtml = '';
     if (d.churn > 0) {
       metaHtml += '<span class="meta-badge meta-churn">⚠ ' + d.churn + ' CHURN</span>';
@@ -900,20 +891,9 @@ function renderBattle(rows) {
     if (d.shoutouts > 0) {
       metaHtml += '<span class="meta-badge meta-shout">⭐ ' + d.shoutouts + ' SHOUTOUT' + (d.shoutouts !== 1 ? 'S' : '') + '</span>';
     }
-    if (d.buffPct > 0) {
-      metaHtml += '<span class="meta-badge meta-buff">+' + d.buffPct.toFixed(0) + '% BUFF APPLIED</span>';
-    }
     if (!metaHtml) {
       metaHtml = '<span class="meta-none">— NO EXTRAS</span>';
     }
-
-    // Score display: show base + buff if buff applied
-    var scoreDisplay = d.buffPct > 0
-      ? d.score.toFixed(2) + '%'
-      : d.score.toFixed(2) + '%';
-    var scoreSubHtml = d.buffPct > 0
-      ? '<div style="font-family:var(--font-mono);font-size:10px;color:var(--cyan);letter-spacing:1px;margin-top:2px;">BASE ' + d.baseScore.toFixed(2) + '% +' + d.buffPct.toFixed(0) + '% BUFF</div>'
-      : '';
 
     grid.innerHTML += '<div class="pod-card ' + m.cls + '">' +
       '<div class="corner-deco tl"></div><div class="corner-deco tr"></div>' +
@@ -928,8 +908,7 @@ function renderBattle(rows) {
       '<div class="pod-score-main">' +
         '<div class="score-block">' +
           '<div class="score-label">OVERALL SCORE</div>' +
-          '<div class="score-value">' + scoreDisplay + '</div>' +
-          scoreSubHtml +
+          '<div class="score-value">' + d.score.toFixed(2) + '%</div>' +
         '</div>' +
         '<div class="members-block">' +
           '<div class="members-count">' + members + '</div>' +
