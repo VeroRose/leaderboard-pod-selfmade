@@ -872,10 +872,10 @@ function renderBattle(rows) {
     var adperf  = pct(pod['Ad Performance Score'] || pod['Ad Performance'] || '');
     var baseScore = pct(pod['Score'] || '');  // READ DIRECTLY FROM SHEET
 
-    // Shoutout buff: +1% per every 3 shoutouts
+    // Shoutout buff: +5% per every 3 shoutouts
     var shoutouts = parseInt(pod['Shoutout'] || pod['Shoutouts'] || '0', 10) || 0;
     var buffCount = Math.floor(shoutouts / 3);
-    var buffPct   = buffCount * 1;
+    var buffPct   = buffCount * 5;
     var score     = baseScore + buffPct;
 
     // Churn count
